@@ -1,7 +1,15 @@
 import os
 import click
 from os.path import expanduser
+import subprocess
 
+DEFAULT_EDITOR = '/usr/bin/vi' # backup, if not defined in environment vars
+
+def _open_in_editor(path):
+    """open a file in users default editor"""
+    path = os.path.abspath(os.path.expanduser(__file__))
+    editor = os.environ.get('EDITOR', DEFAULT_EDITOR)
+    subprocess.call([editor, path])
 
 def _check_required_env_vars():
     keys = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "KEY_NAME"]
@@ -128,10 +136,20 @@ def ls(mname):
             print("No configuration with that name. Available configurations are:")
             _print_all_configurations()
 
+@click.command()
+@click.argument("mname", required=True)
+def edit(mname):
+    if mname in _get_config_names():
+        path = os.path.join(configs.__path__[0], "{}.py".format(mname))
+        _open_in_editor(path)
+    elif mname in _get_custom_config_names():
+        path = os.path.join(_custom_path(), "{}.py".format(mname))
+        _open_in_editor(path)
+
 
 @click.command()
 @click.argument("name", required=True)
-@click.option("--from_existing", type=click.Path(),
+@click.option("--from_existing",
               required=False, default="default",
               help="""Name of an existing configuration file to build from. The contents of the
               new configuration file will be the same as the file given here.
@@ -166,7 +184,7 @@ launch.add_command(from_config)
 
 config.add_command(ls)
 config.add_command(new)
-
+config.add_command(edit)
 
 @click.group()
 def cli():
