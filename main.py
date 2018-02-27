@@ -25,8 +25,6 @@ if _check_required_env_vars():
     from .utils.aws_spot_instance import AWSSpotInstance
     from .utils.aws_spot_exception import SpotConstraintException
 
-@click.command()
-@click.argument("qty", required=True)
 def launch_instances(qty):
     """Launches QTY instances and returns the instance objects."""
     best_az = pricing_util.get_best_az()
@@ -91,13 +89,24 @@ def _find_config(name):
     else:
         return None
 
+def _load_module_from_path(name, path):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(path)
+    foo = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(foo)
+
 @click.command()
-@click.argument("uconf", type=click.Path(), required=True)
-def from_config(uconf):
+@click.argument("conf", required=True)
+def from_config(conf):
     """Launches a number of instances with the given configuration file.
 
     """
-
+    import importlib
+    import sys
+ #   path = _find_config(conf)
+    sys.path.append(_custom_path())
+    uconf = importlib.import_module(conf)
+#    _load_module_from_path("uconf", path)
     instances = launch_instances(uconf.QTY_INSTANCES)
 
     for si in instances:
@@ -206,7 +215,6 @@ def ansible():
     """
     pass
 
-launch.add_command(launch_instances)
 launch.add_command(from_config)
 
 config.add_command(ls)
