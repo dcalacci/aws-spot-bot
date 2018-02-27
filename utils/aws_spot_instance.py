@@ -4,12 +4,14 @@ import time
 import webbrowser
 import socket
 import datetime
+import subprocess
 
-import appscript
 import boto3
 
-import aws_spot_bot.user_config as uconf
-from aws_spot_exception import SpotConstraintException
+from .. import configs
+from configs import default as uconf
+
+from .aws_spot_exception import SpotConstraintException
 
 class AWSSpotInstance():
 
@@ -38,7 +40,7 @@ class AWSSpotInstance():
 
     def request_instance(self):
         """Boots the instance on AWS"""
-        print ">> Requesting instance"
+        print(">> Requesting instance")
         response = self.client.request_spot_instances(
             SpotPrice=str(self.bid),
             ClientToken=self.random_id,
@@ -62,7 +64,7 @@ class AWSSpotInstance():
         return response
 
     def get_spot_request_status(self):
-        print ">> Checking instance status"
+        print(">> Checking instance status")
         response = self.client.describe_spot_instance_requests(
             SpotInstanceRequestIds=[self.spot_instance_request_id],
         )
@@ -71,7 +73,7 @@ class AWSSpotInstance():
         return {'status_code': self.status_code, 'instance_id': self.instance_id}
 
     def cancel_spot_request(self):
-        print ">> Cancelling spot request"
+        print(">> Cancelling spot request")
         response = self.client.cancel_spot_instance_requests(
             SpotInstanceRequestIds=[self.spot_instance_request_id],
         )
@@ -108,7 +110,8 @@ class AWSSpotInstance():
     def open_ssh_term(self):
         """Opens your default terminal and starts SSH session to the instance"""
         # TODO. This wont work on non osx machines.
-        appscript.app('Terminal').do_script('ssh ' + uconf.SSH_USER_NAME + '@' + self.get_ip())
+        subprocess.call(["tmux", "-t", "ssh" "{}@{}".format(uconf.SSH_USER_NAME, self.get_ip())])
+        #appscript.app('Terminal').do_script('ssh ' + uconf.SSH_USER_NAME + '@' + self.get_ip())
 
     def open_in_browser(self, port='80'):
         """Opens the instance in your browser to the specified port.
@@ -140,7 +143,7 @@ class AWSSpotInstance():
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(timeout)
         start = datetime.datetime.now()
-        print ">> waiting for port", port
+        print(">> waiting for port", port)
 
         if not self.get_ip():
             raise Exception("Error getting IP for this instance. Instance must have an IP before calling this method.")
@@ -160,10 +163,10 @@ class AWSSpotInstance():
                 pass
 
             if (datetime.datetime.now() - start).seconds > timeout:
-                print (datetime.datetime.now() - start).seconds
+                print((datetime.datetime.now() - start).seconds)
                 raise Exception("Connection timed out. Try increasing the timeout amount, or fix your server.")
 
-        print ">> port %s is live" % (port)
+        print(">> port %s is live" % (port))
 
 if __name__ == '__main__':
     import pricing_util
@@ -175,7 +178,7 @@ if __name__ == '__main__':
     instance_type = uconf.INSTANCE_TYPES[0]
     si = AWSSpotInstance(region, az_zone, instance_type, uconf.AMI_ID, uconf.BID)
     response = si.request_instance()
-    print si.get_ip()
+    print(si.get_ip())
     si.wait_for_ssh()
     si.wait_for_http()
 

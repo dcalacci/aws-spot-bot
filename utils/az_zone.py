@@ -1,8 +1,14 @@
 import datetime
 import numpy as np
 import boto3
+import sys
+import os
 
-import aws_spot_bot.user_config as uconf
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
+#import aws_spot_bot.config.default as uconf
+from .. import configs
+from configs import default as uconf
 
 
 class AZZone():
@@ -37,7 +43,7 @@ class AZZone():
 
     def get_spot_pricing_history(self, instance_types, product_descriptions=['Linux/UNIX']):
         """ Returns the spot price history given a specified AZ and region."""
-        print "Getting spot prices for", self.name
+        print("Getting spot prices for", self.name)
 
         response = self.client.describe_spot_price_history(
             DryRun=False,

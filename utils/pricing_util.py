@@ -2,11 +2,12 @@ from operator import attrgetter
 import os
 import pickle
 import datetime
-
 import boto3
 
-from az_zone import AZZone
-import aws_spot_bot.user_config as uconf
+from . import az_zone
+from .. import configs
+from configs import default as uconf
+#import aws_spot_bot.user_config as uconf
 
 
 def modification_date(filename):
@@ -16,7 +17,7 @@ def modification_date(filename):
 
 def generate_region_AZ_dict():
     """ Generates a dict of {'region': [availability_zones, az2]} """
-    print "Getting all regions and AZ's... (this may take some time)"
+    print("Getting all regions and AZ's... (this may take some time)")
     region_az = {}
     for region in uconf.AWS_REGIONS:
         client = boto3.setup_default_session(region_name=region)
@@ -27,7 +28,7 @@ def generate_region_AZ_dict():
             if zone['State'] == 'available':
                 avail_zones.append(zone['ZoneName'])
         region_az[region] = avail_zones
-        print ">>", region
+        print(">>", region)
 
     return region_az
 
@@ -53,7 +54,7 @@ def get_initialized_azs():
         # Get the spot pricing for each AZ
         for region, azs in az_dict.iteritems():
             for az in azs:
-                az_obj = AZZone(region, az)
+                az_obj = az_zone.AZZone(region, az)
                 az_objects.append(az_obj)
 
         # pickle.dump(az_objects, open(az_objects_fn, "wb"))
@@ -71,10 +72,10 @@ def get_best_az():
     sorted_azs = sorted(azs, key=attrgetter('score'))
 
     for az in sorted_azs:
-        print az.name
-        print '>> price:', az.current_price
-        print '>> mean:', az.spot_price_mean
-        print '>> variance:', az.spot_price_variance
-        print '>> score:', az.score
+        print(az.name)
+        print('>> price:', az.current_price)
+        print('>> mean:', az.spot_price_mean)
+        print('>> variance:', az.spot_price_variance)
+        print('>> score:', az.score)
 
     return sorted_azs[-1]
