@@ -106,6 +106,7 @@ def _make_download_script(code_url):
     rm code.tar.gz
     sudo mv research /home/rstudio
     sudo usermod -aG ubuntu rstudio
+    sudo chmod -R g+rwx /home/rstudio
     sudo chown -R rstudio:ubuntu /home/rstudio/research
     """.format(code_url=code_url)
 
@@ -319,9 +320,9 @@ def browser(ctx):
 @click.command()
 @click.pass_context
 def upload_code(ctx):
-    uconf = paths._load_config(conf)
     instance = ctx.obj['instance']
     conf = ctx.obj['conf']
+    uconf = paths._load_config(conf)
     code_url = upload_archive(os.getcwd(),
                               conf,
                               uconf.ARCHIVE_EXCLUDES,
@@ -333,17 +334,89 @@ def upload_code(ctx):
     with settings(host_string=instance.ip):
         res = fabric.operations.run(_make_download_script(code_url))
 
+@click.command()
+@click.pass_context
+def rsync(ctx):
+    instance = ctx.obj['instance']
+    conf = ctx.obj['conf']
+    uconf = paths._load_config(conf)
+    cmd = ["rsync", "-az",
+           "-p",
+           "-e",
+           'ssh -i {}'.format(expanduser(uconf.PATH_TO_KEY)),
+           ".",
+           "{}@{}:/home/rstudio/research".format(
+               uconf.SSH_USER_NAME,
+               instance.ip)]
+    _highlight("Prepping to sync entire code directory")
+
+    get_total_size = (cmd[:1] + ["-vnaz"] + cmd[2:])
+    ps = subprocess.Popen(get_total_size,
+                          stdout=subprocess.PIPE)
+    output = subprocess.check_output(('grep', 'total'),
+                                     stdin=ps.stdout)
+    ps.wait()
+    _highlight(output.decode("utf-8").strip())
+
+    if click.confirm('Do you want to continue?'):
+        subprocess.call(cmd)
 
 run.add_command(ansible)
 run.add_command(ssh)
 run.add_command(browser)
 run.add_command(upload_code)
+run.add_command(rsync)
 
 @click.group()
-def data():
+@click.argument("conf")
+@click.argument("n")
+@click.pass_context
+def data(ctx, conf, n):
+    instance = from_json(conf, n)
+    ctx.obj['instance'] = instance
+    ctx.obj['conf'] = conf
     pass
 
+@click.command()
+@click.pass_context
+def diff(ctx):
+    instance = ctx.obj['instance']
+    conf = ctx.obj['conf']
+    uconf = paths._load_config(conf)
+    cmd = ["rsync", "-navz",
+           "-e",
+           'ssh -i {}'.format(expanduser(uconf.PATH_TO_KEY)),
+           "{}@{}:/home/rstudio/research/{}".format(
+               uconf.SSH_USER_NAME,
+               instance.ip,
+               uconf.DATA_DIR),
+           "{}".format(uconf.DATA_DIR)]
+    #print(">> cmd: ", " ".join(cmd))
+    _highlight("These files will be changed on a sync:")
+    subprocess.call(cmd)
 
+@click.command()
+@click.pass_context
+def sync(ctx):
+    instance = ctx.obj['instance']
+    conf = ctx.obj['conf']
+    uconf = paths._load_config(conf)
+    #rsync -avz -e "ssh -p1234  -i /home/username/.ssh/1234-identity" dir user@server:
+
+    cmd = ["rsync", "-avz",
+           "--info=progress2"
+           "-e",
+           'ssh -i {}'.format(expanduser(uconf.PATH_TO_KEY)),
+           "{}@{}:/home/rstudio/research/{}".format(
+               uconf.SSH_USER_NAME,
+               instance.ip,
+               uconf.DATA_DIR),
+           "{}".format(uconf.DATA_DIR)]
+    _highlight("Syncing files using rsync...")
+    if click.confirm('Do you want to continue?'):
+        subprocess.call(cmd)
+
+data.add_command(diff)
 
 @click.group()
 def cli():
@@ -352,6 +425,7 @@ def cli():
 cli.add_command(launch)
 cli.add_command(config)
 cli.add_command(run)
+cli.add_command(data)
 
 
 if __name__ == "__main__":
