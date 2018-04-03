@@ -19,12 +19,15 @@ def generate_region_AZ_dict():
     """ Generates a dict of {'region': [availability_zones, az2]} """
     print("Getting all regions and AZ's... (this may take some time)")
     region_az = {}
+    # print('"{}"'.format(uconf.AWS_ACCESS_KEY_ID))
+    # print('"{}"'.format(uconf.AWS_ACCESS_KEY_ID.strip()))
     for region in uconf.AWS_REGIONS:
-        client = boto3.setup_default_session(region_name=region)
-        client = boto3.client('ec2', aws_access_key_id=uconf.AWS_ACCESS_KEY_ID, aws_secret_access_key=uconf.AWS_SECRET_ACCESS_KEY)
-
+        ec2 = boto3.client('ec2',
+                           region_name=region)
+        print(ec2.describe_hosts())
         avail_zones = []
-        for zone in client.describe_availability_zones()['AvailabilityZones']:
+        print(ec2.describe_availability_zones())
+        for zone in ec2.describe_availability_zones()['AvailabilityZones']:
             if zone['State'] == 'available':
                 avail_zones.append(zone['ZoneName'])
         region_az[region] = avail_zones
@@ -44,6 +47,7 @@ def get_initialized_azs():
         az_dict = pickle.load(open(az_pickle_fn, "rb"))
     else:
         az_dict = generate_region_AZ_dict()
+        print("dumping to file...")
         pickle.dump(az_dict, open(az_pickle_fn, "wb"))
 
     # Loads AZs from pickle if it exists and is less than 30 days old, else fetches them
@@ -52,7 +56,9 @@ def get_initialized_azs():
     else:
         az_objects = []
         # Get the spot pricing for each AZ
-        for region, azs in az_dict.iteritems():
+        print("getting spot pricing...")
+        for region, azs in az_dict.items():
+            print(region, azs)
             for az in azs:
                 az_obj = az_zone.AZZone(region, az)
                 az_objects.append(az_obj)
@@ -64,7 +70,7 @@ def get_initialized_azs():
 
 def get_best_az():
     azs = get_initialized_azs()
-
+    print("Found {} AZs.".format(len(azs)))
     for az in azs:
         az.calculate_score(uconf.INSTANCE_TYPES, 0.65)
 

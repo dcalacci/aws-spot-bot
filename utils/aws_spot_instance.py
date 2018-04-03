@@ -10,12 +10,14 @@ import boto3
 
 from .. import configs
 from configs import default as uconf
-
+from os.path import expanduser
 from .aws_spot_exception import SpotConstraintException
+from . import paths
 
 class AWSSpotInstance():
 
-    def __init__(self, region, az_zone, instance_type, ami_id, bid):
+    def __init__(self, region, az_zone, instance_type, ami_id, bid, config_name):
+        uconf = paths._load_config(config_name)
         self.random_id = str(random.random() * 1000)
         self.az_zone = az_zone
         self.region = region
@@ -25,12 +27,15 @@ class AWSSpotInstance():
         self.ami_id = ami_id
         self.key_name = uconf.KEY_NAME
         self.security_group_id = uconf.SECURITY_GROUP_ID
+        self.security_group_name = uconf.SECURITY_GROUP_NAME
+        self.GROUP_NAME = uconf.GROUP_NAME
 
         # == Boto3 related tools ==
         boto3.setup_default_session(region_name=self.region)
-        self.client = boto3.client('ec2', aws_access_key_id=uconf.AWS_ACCESS_KEY_ID, aws_secret_access_key=uconf.AWS_SECRET_ACCESS_KEY)
-        session = boto3.session.Session(aws_access_key_id=uconf.AWS_ACCESS_KEY_ID, aws_secret_access_key=uconf.AWS_SECRET_ACCESS_KEY, region_name='us-east-1')
+        self.client = boto3.client('ec2')
+        session = boto3.session.Session(region_name=self.region)
         self.ec2_instance = session.resource('ec2')
+        self.group_name = uconf.GROUP_NAME
 
         # == Values that we need to wait to get from AWS ==
         self.spot_instance_request_id = None
@@ -40,13 +45,14 @@ class AWSSpotInstance():
 
     def request_instance(self):
         """Boots the instance on AWS"""
-        print(">> Requesting instance")
+        print(">> Requesting instance, key name: {}".format(self.key_name))
+        print(">> Region: ", self.region)
         response = self.client.request_spot_instances(
             SpotPrice=str(self.bid),
             ClientToken=self.random_id,
             InstanceCount=1,
             Type='one-time',
-            # ValidUntil=datetime.datetime.utcnow() + datetime.timedelta(seconds=60 * 100),
+            ValidUntil=datetime.datetime.utcnow() + datetime.timedelta(seconds=60 * 100),
             LaunchSpecification={
                 'ImageId': self.ami_id,
                 'KeyName': self.key_name,
@@ -55,12 +61,13 @@ class AWSSpotInstance():
                     'AvailabilityZone': self.az_zone,
                 },
                 'EbsOptimized': False,
-                'SecurityGroupIds': [
-                    self.security_group_id
-                ]
+                # 'SecurityGroupIds': [
+                #     self.security_group_id
+                # ]
             }
         )
         self.spot_instance_request_id = response.get('SpotInstanceRequests')[0].get('SpotInstanceRequestId')
+        print(response.get("SpotInstanceRequests")[0])
         return response
 
     def get_spot_request_status(self):
@@ -78,6 +85,29 @@ class AWSSpotInstance():
             SpotInstanceRequestIds=[self.spot_instance_request_id],
         )
         return response
+
+
+    def open_http_and_ssh(self):
+        from . import security_groups as sg
+        print(">> Altering security group to allow ssh and http access")
+
+        RULES = [
+            sg.SecurityGroupRule("tcp", "80", "22", "0.0.0.0/0", None),
+            sg.SecurityGroupRule("tcp", "22", "22", "0.0.0.0/0", None)
+        ]
+        instance_id = response.get('SpotInstanceRequests')[0].get('InstanceId')
+        instance = self.ec2_instance.Instance(self.instance_id)
+        ip = instance.public_ip_address
+        self.security_groups = self.ec2_instance.Instance(self.instance_id).groups
+
+        self.vpc = self.ec2_instance.Vpc(instance.vpc_id)
+        group = sg.get_or_create_security_group(
+            self.vpc, self.security_group_name)
+        sg.update_security_group(self.client,
+                                 group,
+                                 RULES)
+#        vpc.modify_attribute()
+
 
     def get_ip(self):
         if self.ip:
@@ -120,8 +150,9 @@ class AWSSpotInstance():
         webbrowser.open_new_tab('http://' + self.ip + ':' + port)
 
     def add_to_ansible_hosts(self):
-        path = os.path.dirname(os.path.dirname(__file__))
-        with open(path + '/ansible/hosts', 'a') as file:
+        home = expanduser("~")
+        path = "{}/.lab_configs/ansible".format(home)
+        with open(os.path.join(path, '{}_hosts'.format(self.GROUP_NAME)), 'a') as file:
             file.write(str(self.ip) + '\n')
 
     def wait_for_http(self, port=80, timeout=uconf.SERVER_TIMEOUT):
@@ -147,6 +178,9 @@ class AWSSpotInstance():
 
         if not self.get_ip():
             raise Exception("Error getting IP for this instance. Instance must have an IP before calling this method.")
+
+        print(">> Creating security group in VPC...")
+        self.open_http_and_ssh()
 
         while True:
             # We need this try block because depending on the parameters the system will cause the connection
@@ -178,6 +212,7 @@ if __name__ == '__main__':
     instance_type = uconf.INSTANCE_TYPES[0]
     si = AWSSpotInstance(region, az_zone, instance_type, uconf.AMI_ID, uconf.BID)
     response = si.request_instance()
+    print(response)
     print(si.get_ip())
     si.wait_for_ssh()
     si.wait_for_http()

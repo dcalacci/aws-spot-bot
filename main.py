@@ -1,9 +1,22 @@
 import os
 import click
-from os.path import expanduser
+import glob
+import json
 import subprocess
+import boto3
+from os.path import expanduser
+from fabric.api import env
+from fabric.tasks import execute
+from fabric.operations import run, put
+from fabric.api import hosts, env
+from fabric.context_managers import cd, settings
+
 
 DEFAULT_EDITOR = '/usr/bin/vi' # backup, if not defined in environment vars
+
+def _run_on_nodes(host, cmd):
+    with settings(host_string=host):
+        res = run(cmd)
 
 def _open_in_editor(path):
     """open a file in users default editor"""
@@ -14,26 +27,113 @@ def _open_in_editor(path):
 def _check_required_env_vars():
     keys = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "KEY_NAME"]
     in_env = [k in os.environ for k in keys]
-    assert all(in_env), 'Please set the environment variables "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"!'
+#    assert all(in_env), 'Please set the environment variables "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"!'
     return True
 
 if _check_required_env_vars():
-    from .configs import default as uconf
-
-    from . import configs
     from .utils import pricing_util
     from .utils.aws_spot_instance import AWSSpotInstance
     from .utils.aws_spot_exception import SpotConstraintException
+    from .utils import paths
 
-def launch_instances(qty):
+
+def _highlight(x, fg='green'):
+    if not isinstance(x, str):
+        x = json.dumps(x, sort_keys=True, indent=2)
+    click.secho(x, fg=fg)
+
+def upload_archive(fpath, name, archive_excludes, s3_bucket, skip_archive):
+    import hashlib, os.path as osp, subprocess, tempfile, uuid, sys
+    # Archive this package
+    thisfile_dir = osp.dirname(osp.abspath(fpath))
+    pkg_dir = osp.abspath(osp.join(thisfile_dir, '.'))
+    _highlight("Running tar from: {}".format(pkg_dir))
+#    assert osp.abspath(__file__) == osp.join(pkg_parent_dir, pkg_subdir, 'deploy2.py'), 'You moved me!'
+
+    # Run tar
+#    tmpdir = tempfile.TemporaryDirectory()
+    tmpdir = "/tmp"
+    if skip_archive:
+        _highlight("Skipping archiving, using latest code...")
+        # use latest archive
+        archives = glob.glob(os.path.join(tmpdir, 'crl_*'))
+        if len(archives) == 0:
+            _highlight("No existing archives found in {}...".format(tmpdir))
+            input("\nPress return to continue and create a new code archive.")
+            upload_archive(fpath, name, archive_excludes, s3_bucket, False)
+            return
+        latest_file = max(archives, key=os.path.getctime)
+        local_archive_path = latest_file
+    else:
+        local_archive_path = osp.join(tmpdir, 'aws_spot_{}.tar.gz'.format(uuid.uuid4()))
+        tar_cmd = ["tar", "-vzcf", local_archive_path]
+        for pattern in archive_excludes:
+            tar_cmd += ["--exclude", '{}'.format(pattern)]
+        tar_cmd += ['.']
+        _highlight("TAR CMD: {}".format(" ".join(tar_cmd)))
+
+        if sys.platform == 'darwin':
+            # Prevent Mac tar from adding ._* files
+            env = os.environ.copy()
+            env['COPYFILE_DISABLE'] = '1'
+            subprocess.check_call(tar_cmd, env=env)
+        else:
+            subprocess.check_call(tar_cmd)
+
+    # Construct remote path to place the archive on S3
+    with open(local_archive_path, 'rb') as f:
+        archive_hash = hashlib.sha224(f.read()).hexdigest()
+    remote_archive_path = '{}/{}_{}.tar.gz'.format(s3_bucket, name, archive_hash)
+
+    # Upload
+    upload_cmd = ["aws", "s3", "cp", local_archive_path, remote_archive_path]
+    _highlight(" ".join(upload_cmd))
+    subprocess.check_call(upload_cmd)
+
+    # presign_cmd = ["aws", "s3", "presign", remote_archive_path, "--expires-in", str(60 * 60 * 24 * 30)]
+    presign_cmd = ["aws", "s3", "presign", remote_archive_path, "--expires-in", str(60 * 60 * 24)]
+    _highlight(" ".join(presign_cmd))
+    remote_url = subprocess.check_output(presign_cmd).decode("utf-8").strip()
+    return remote_url
+
+def _make_download_script(code_url):
+    return """
+set -x
+cd ~
+kill -9 $(pgrep redis)
+tmux kill-server
+wget -S '{code_url}' -O code.tar.gz
+tar xvaf code.tar.gz
+rm code.tar.gz
+""".format(code_url=code_url)
+
+def get_ami_id_from_name_and_region(name, region):
+    session = boto3.setup_default_session(region_name=region)
+    client = boto3.client('ec2')
+    amis = client.describe_images()['Images']
+    amis = [ami for ami in amis if 'Name' in ami.keys()]
+    matches = [ami for ami in amis if ami['Name'] == name]
+    if len(matches) > 0:
+        return matches[0]['ImageId']
+    else:
+        return None
+
+
+def launch_instances(qty, config_name):
     """Launches QTY instances and returns the instance objects."""
+    uconf = paths._load_config(config_name)
     best_az = pricing_util.get_best_az()
     launched_instances = []
     print("Best availability zone:", best_az.name)
-
+    print("getting AMI named {} from region {}".format(uconf.AMI_NAME, best_az.region))
+    ami_id = get_ami_id_from_name_and_region(uconf.AMI_NAME, best_az.region)
+    if ami_id is None:
+        print("No AMI Match. Exiting...")
+    else:
+        print("Found matching AMI with ID {}".format(ami_id))
     for idx in range(qty):
         print('>> Launching instance #{}'.format(idx))
-        si = AWSSpotInstance(best_az.region, best_az.name, uconf.INSTANCE_TYPES[0], uconf.AMI_ID, uconf.BID)
+        si = AWSSpotInstance(best_az.region, best_az.name, uconf.INSTANCE_TYPES[0], ami_id, uconf.BID, config_name)
         si.request_instance()
         try:
             si.get_ip()
@@ -45,86 +145,6 @@ def launch_instances(qty):
 
     return launched_instances
 
-def _custom_path():
-    home = expanduser("~")
-    return "{}/.lab_configs".format(home)
-
-def _has_custom_configs():
-    return len(os.listdir(_custom_path())) > 0
-
-def _print_names(names):
-    for name in names:
-        print("- {}".format(name))
-
-def _has_custom_configs():
-    return os.path.exists(_custom_path())
-
-def _get_custom_config_names():
-    if not _has_custom_configs():
-        return []
-    return [s.split(".py")[0] for s in os.listdir(_custom_path())]
-
-def _get_config_names():
-    import pkgutil
-    return [m for i,m,p in pkgutil.iter_modules(configs.__path__)]
-
-def _all_config_names():
-    return _get_config_names() + _get_custom_config_names()
-
-def _print_all_configurations():
-    custom_names = _get_custom_config_names()
-    names = _get_config_names()
-    print("Available default configurations:\n")
-    _print_names(names)
-    print("Available custom configurations:\n")
-    _print_names(custom_names)
-
-def _find_config(name):
-    """Returns full path for configuration file with the given name.
-    """
-    if name in _get_config_names():
-        return os.path.join(configs.__path__[0], "{}.py".format(name))
-    elif name in _get_custom_config_names():
-        return os.path.join(_custom_path(), "{}.py".format(name))
-    else:
-        return None
-
-def _load_module_from_path(name, path):
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(path)
-    foo = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(foo)
-
-@click.command()
-@click.argument("conf", required=True)
-def from_config(conf):
-    """Launches a number of instances with the given configuration file.
-
-    """
-    import importlib
-    import sys
- #   path = _find_config(conf)
-    sys.path.append(_custom_path())
-    uconf = importlib.import_module(conf)
-#    _load_module_from_path("uconf", path)
-    instances = launch_instances(uconf.QTY_INSTANCES)
-
-    for si in instances:
-        if uconf.WAIT_FOR_HTTP:
-            si.wait_for_http()
-        if uconf.WAIT_FOR_SSH:
-            si.wait_for_ssh()
-        if uconf.OPEN_IN_BROWSER:
-            si.open_in_browser()
-        if uconf.OPEN_SSH:
-             si.open_ssh_term()
-        if uconf.ADD_TO_ANSIBLE_HOSTS:
-            si.add_to_ansible_hosts()
-
-    if uconf.RUN_ANSIBLE:
-        os.system('cd ansible && ansible-playbook -s play.yml')
-
-
 @click.command()
 @click.argument("mname", required=False, default=None)
 def ls(mname):
@@ -135,26 +155,26 @@ def ls(mname):
 
     """
     if not mname:
-        _print_all_configurations()
+        paths._print_all_configurations()
     else:
-        if mname in _get_config_names():
+        if mname in paths._get_config_names():
             with open(os.path.join(configs.__path__[0], "{}.py".format(mname)), 'r') as fin:
                 print(fin.read())
-        elif mname in _get_custom_config_names():
-            with open(os.path.join(_custom_path(), "{}.py".format(mname)), 'r') as fin:
+        elif mname in paths._get_custom_config_names():
+            with open(os.path.join(paths._custom_path(), "{}.py".format(mname)), 'r') as fin:
                 print(fin.read())
         else:
             print("No configuration with that name. Available configurations are:")
-            _print_all_configurations()
+            paths._print_all_configurations()
 
 @click.command()
 @click.argument("mname", required=True)
 def edit(mname):
-    if mname in _get_config_names():
+    if mname in paths._get_config_names():
         path = os.path.join(configs.__path__[0], "{}.py".format(mname))
         _open_in_editor(path)
-    elif mname in _get_custom_config_names():
-        path = os.path.join(_custom_path(), "{}.py".format(mname))
+    elif mname in paths._get_custom_config_names():
+        path = os.path.join(paths._custom_path(), "{}.py".format(mname))
         _open_in_editor(path)
 
 
@@ -173,7 +193,7 @@ def new(name, from_existing):
     home = expanduser("~")
     if not os.path.exists("{}/.lab_configs".format(home)):
         os.mkdir("{}/.lab_configs".format(home))
-    file_to_copy = _find_config(from_existing)
+    file_to_copy = paths._find_config(from_existing)
     shutil.copyfile(file_to_copy,
                     "{}/.lab_configs/{}.py".format(home, name))
 
@@ -183,18 +203,62 @@ def new(name, from_existing):
 def edit_ansible(name):
     """Edit the ansible playbook file for the given configuration"""
     import shutil
-    if name not in _all_config_names():
+    if name not in paths._all_config_names():
         return
-    ans_path = os.path.join(_custom_path(), "ansible")
+    ans_path = os.path.join(paths._custom_path(), "ansible")
     if not os.path.exists(ans_path):
         os.mkdir(ans_path)
 
-    path = os.path.join(_custom_path(), "ansible/{}.yml".format(name))
+    path = os.path.join(paths._custom_path(), "ansible/{}.yml".format(name))
     if not os.path.exists(path):
         shutil.copyfile(os.path.join(configs.__path__[0], "../ansible/play.yml"),
                         path)
     print("Saved ansible play to: {}".format(path))
     _open_in_editor(path)
+
+def _run_ansible(conf, tags):
+    ans_path = os.path.join(paths._custom_path(),
+                            "ansible",
+                            "{}.yml".format(conf))
+    s = ","
+    tags = s.join(tags)
+    os.system('ansible-playbook -i {} -s {}.yml --tags "{}"'.format(_find_inventory(conf),
+                                                                    ans_path,
+                                                                    tags))
+
+@click.command()
+@click.argument("conf", required=True)
+def from_config(conf):
+    """Launches a number of instances with the given configuration file.
+
+    """
+    import importlib
+    import sys
+    uconf = paths._load_config(conf)
+    print("Using configuration {}".format(conf))
+    #importlib.import_module(conf)
+    #uconf = importlib.import_module(conf)
+    #_load_module_from_path("uconf", path)
+    instances = launch_instances(uconf.QTY_INSTANCES, conf)
+    code_url = upload_archive(os.getcwd(), conf, uconf.ARCHIVE_EXCLUDES, uconf.S3_BUCKET, skip_archive=False)
+
+    for si in instances:
+        if uconf.WAIT_FOR_HTTP:
+            si.wait_for_http()
+        if uconf.WAIT_FOR_SSH:
+            si.wait_for_ssh()
+        if uconf.OPEN_IN_BROWSER:
+            si.open_in_browser()
+        if uconf.OPEN_SSH:
+             si.open_ssh_term()
+        if uconf.ADD_TO_ANSIBLE_HOSTS:
+            si.add_to_ansible_hosts()
+        if uconf.COPY_CODE:
+            execute(_run_on_nodes, si.ip,
+                    _make_download_script(code_url))
+
+    if uconf.RUN_ANSIBLE:
+        _run_ansible(conf, ["configuration"])
 
 @click.group()
 def config():

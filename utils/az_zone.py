@@ -16,9 +16,8 @@ class AZZone():
     def __init__(self, region, name):
         self.region = region
         self.name = name
-        self.client = boto3.setup_default_session(region_name=self.region)
-        self.client = boto3.client('ec2', aws_access_key_id=uconf.AWS_ACCESS_KEY_ID,
-                                   aws_secret_access_key=uconf.AWS_SECRET_ACCESS_KEY)
+        boto3.setup_default_session(region_name=self.region)
+        self.client = boto3.client('ec2')
         self.spot_pricing_history = None
         self.score = None
 
@@ -54,7 +53,6 @@ class AZZone():
             ProductDescriptions=product_descriptions)
 
         self.spot_pricing_history = response.get('SpotPriceHistory', [])
-        return response
 
     def calculate_score(self, instance_types, bid, update=False):
         if self.spot_pricing_history is None:
@@ -65,10 +63,12 @@ class AZZone():
         # TODO: This should be removed but I am lazy and this is easier than catching exceptions
         # @jgre can you fix?
         if self.spot_pricing_history == []:
+            self.score = -1e10
             return -1e10
 
         # We are not interested in this AZ if its more than the bid, so lets just return
         if self.current_price > bid:
+            self.score = 0
             return 0
 
         # Here we multiply each item by a weight.

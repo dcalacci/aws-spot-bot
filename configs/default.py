@@ -7,8 +7,8 @@ SPOT_PRICING_PICKLE_EXPIRE_SEC = 30 * 60
 
 
 # =============== Personal config ==================
-AWS_ACCESS_KEY_ID = os.environ["AWS_ACCESS_KEY_ID"]
-AWS_SECRET_ACCESS_KEY = os.environ["AWS_SECRET_ACCESS_KEY"]
+# AWS_ACCESS_KEY_ID = os.environ["AWS_ACCESS_KEY_ID"]
+# AWS_SECRET_ACCESS_KEY = os.environ["AWS_SECRET_ACCESS_KEY"]
 KEY_NAME = os.environ["KEY_NAME"]
 SECURITY_GROUP_ID = ''
 SECURITY_GROUP = ''
