@@ -24,9 +24,9 @@ def generate_region_AZ_dict():
     for region in uconf.AWS_REGIONS:
         ec2 = boto3.client('ec2',
                            region_name=region)
-        print(ec2.describe_hosts())
+        #print(ec2.describe_hosts())
         avail_zones = []
-        print(ec2.describe_availability_zones())
+        #print(ec2.describe_availability_zones())
         for zone in ec2.describe_availability_zones()['AvailabilityZones']:
             if zone['State'] == 'available':
                 avail_zones.append(zone['ZoneName'])

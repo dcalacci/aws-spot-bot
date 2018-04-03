@@ -28,7 +28,10 @@ class MyEncoder(json.JSONEncoder):
                 return None
 
 def from_json(conf, n):
-    with open('{}_{}.json'.format(conf, n), 'r') as f:
+    path = os.path.join(paths._custom_path,
+                        "instances",
+                        "{}_{}.json".format(conf, n))
+    with open(path, 'r') as f:
             s = json.load(f)
     random_id,az_zone,region, instance_type,ip, bid, ami_id,key_name, security_group_id,security_group_name,group_name, spot_instance_request_id,instance_id, ip, config_name = s
 
@@ -90,7 +93,13 @@ class AWSSpotInstance():
                              self.security_group_name,
                              self.group_name, self.spot_instance_request_id,
                              self.instance_id, self.ip, self.config_name]
-        with open('{}_{}.json'.format(self.group_name, n), 'w') as f:
+        instances_path = os.path.join(paths._custom_path,
+                                      "instances")
+        if not os.path.exists(instances_path):
+            os.mkdir(instances_path)
+        path = os.path.join(instances_path,
+                            "{}_{}.json".format(self.group_name, n))
+        with open(path, 'w') as f:
             json.dump(self.serializable, f)
 
     def start_boto(self):

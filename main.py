@@ -238,7 +238,9 @@ def from_config(conf):
     import importlib
     import sys
     uconf = paths._load_config(conf)
-    print("Using configuration {}".format(conf))
+    _highlight("Using configuration {}".format(conf))
+    if not click.confirm('Do you want to continue? This will upload your current directory to the instance.'):
+        return
     #importlib.import_module(conf)
     #uconf = importlib.import_module(conf)
     #_load_module_from_path("uconf", path)
@@ -303,7 +305,7 @@ def run(ctx, conf, n):
     pass
 
 def ls(conf):
-    with open("{}.pickle".format(conf), "rb") as f:
+    with open(paths._custom_path() + "/{}.pickle".format(conf), "rb") as f:
         instances = pickle.load(f)
     print(["{}: {}".format(n, instance.ip) for n, instance in enumerate(instances)])
 
