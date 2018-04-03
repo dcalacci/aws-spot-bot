@@ -5,7 +5,7 @@ import webbrowser
 import socket
 import datetime
 import subprocess
-
+import json
 import boto3
 
 from .. import configs
@@ -14,10 +14,48 @@ from os.path import expanduser
 from .aws_spot_exception import SpotConstraintException
 from . import paths
 
+# class MyEncoder(json.JSONEncoder):
+#     def default(self, obj):
+#         if not isinstance(obj, Tree):
+#             return super(MyEncoder, self).default(obj)
+
+class MyEncoder(json.JSONEncoder):
+        def default(self, o):
+            print(o)
+            try:
+                return o.__dict__
+            except:
+                return None
+
+def from_json(conf, n):
+    with open('{}_{}.json'.format(conf, n), 'r') as f:
+            s = json.load(f)
+    random_id,az_zone,region, instance_type,ip, bid, ami_id,key_name, security_group_id,security_group_name,group_name, spot_instance_request_id,instance_id, ip, config_name = s
+
+    si = AWSSpotInstance(region,
+                         az_zone,
+                         instance_type,
+                         ami_id,
+                         uconf.BID,
+                         config_name)
+    si.random_id = random_id
+    si.security_group_id = security_group_id
+    si.security_group_name = security_group_name,
+    si.spot_instance_request_id = spot_instance_request_id
+    si.instance_id = instance_id
+    si.ip = ip
+    print(">> created instance with ip: ", si.ip, ip)
+    si.start_boto()
+    return si
+
+
+# TODO: make an easy serialization of this object to save
+# and then use later to destroy, run commands on, etc.
 class AWSSpotInstance():
 
     def __init__(self, region, az_zone, instance_type, ami_id, bid, config_name):
         uconf = paths._load_config(config_name)
+        self.config_name = config_name
         self.random_id = str(random.random() * 1000)
         self.az_zone = az_zone
         self.region = region
@@ -35,6 +73,7 @@ class AWSSpotInstance():
         self.client = boto3.client('ec2')
         session = boto3.session.Session(region_name=self.region)
         self.ec2_instance = session.resource('ec2')
+
         self.group_name = uconf.GROUP_NAME
 
         # == Values that we need to wait to get from AWS ==
@@ -42,6 +81,23 @@ class AWSSpotInstance():
         self.instance_id = None
         self.status_code = None
         self.ip = None
+
+    def serialize(self, n):
+        self.serializable = [self.random_id, self.az_zone,
+                             self.region, self.instance_type,
+                             self.ip, self.bid, self.ami_id,
+                             self.key_name, self.security_group_id,
+                             self.security_group_name,
+                             self.group_name, self.spot_instance_request_id,
+                             self.instance_id, self.ip, self.config_name]
+        with open('{}_{}.json'.format(self.group_name, n), 'w') as f:
+            json.dump(self.serializable, f)
+
+    def start_boto(self):
+        boto3.setup_default_session(region_name=self.region)
+        self.client = boto3.client('ec2')
+        session = boto3.session.Session(region_name=self.region)
+        self.ec2_instance = session.resource('ec2')
 
     def request_instance(self):
         """Boots the instance on AWS"""
@@ -91,28 +147,29 @@ class AWSSpotInstance():
         from . import security_groups as sg
         print(">> Altering security group to allow ssh and http access")
 
-        RULES = [
-            sg.SecurityGroupRule("tcp", "80", "22", "0.0.0.0/0", None),
-            sg.SecurityGroupRule("tcp", "22", "22", "0.0.0.0/0", None)
+        rules = [
+            sg.SecurityGroupRule("tcp", 80, 80, "0.0.0.0/0", None),
+            sg.SecurityGroupRule("tcp", 22, 22, "0.0.0.0/0", None)
         ]
-        instance_id = response.get('SpotInstanceRequests')[0].get('InstanceId')
         instance = self.ec2_instance.Instance(self.instance_id)
         ip = instance.public_ip_address
-        self.security_groups = self.ec2_instance.Instance(self.instance_id).groups
+        #self.security_groups = self.ec2_instance.Instance(self.instance_id).groups
 
         self.vpc = self.ec2_instance.Vpc(instance.vpc_id)
         group = sg.get_or_create_security_group(
-            self.vpc, self.security_group_name)
+            self.client,
+            self.security_group_name,
+            vpc_id=self.vpc.vpc_id)
         sg.update_security_group(self.client,
                                  group,
-                                 RULES)
-#        vpc.modify_attribute()
-
+                                 rules)
 
     def get_ip(self):
         if self.ip:
+            print(">> Have IP: {}".format(self.ip))
             return self.ip
 
+        print(">> No IP, checking status... {}".format(self.ip))
         if not self.status_code:
             self.get_spot_request_status()
 
@@ -140,7 +197,10 @@ class AWSSpotInstance():
     def open_ssh_term(self):
         """Opens your default terminal and starts SSH session to the instance"""
         # TODO. This wont work on non osx machines.
-        subprocess.call(["tmux", "-t", "ssh" "{}@{}".format(uconf.SSH_USER_NAME, self.get_ip())])
+        uconf = paths._load_config(self.group_name)
+        cmd = ["tmux", "-c", "ssh -i {} {}@{}".format(uconf.PATH_TO_KEY,uconf.SSH_USER_NAME, self.get_ip())]
+        print(">> connecting using: ", cmd)
+        subprocess.call(cmd)
         #appscript.app('Terminal').do_script('ssh ' + uconf.SSH_USER_NAME + '@' + self.get_ip())
 
     def open_in_browser(self, port='80'):

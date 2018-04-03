@@ -4,19 +4,16 @@ import glob
 import json
 import subprocess
 import boto3
+import dill as pickle
+
 from os.path import expanduser
-from fabric.api import env
+import fabric
 from fabric.tasks import execute
-from fabric.operations import run, put
 from fabric.api import hosts, env
 from fabric.context_managers import cd, settings
 
 
 DEFAULT_EDITOR = '/usr/bin/vi' # backup, if not defined in environment vars
-
-def _run_on_nodes(host, cmd):
-    with settings(host_string=host):
-        res = run(cmd)
 
 def _open_in_editor(path):
     """open a file in users default editor"""
@@ -32,7 +29,7 @@ def _check_required_env_vars():
 
 if _check_required_env_vars():
     from .utils import pricing_util
-    from .utils.aws_spot_instance import AWSSpotInstance
+    from .utils.aws_spot_instance import AWSSpotInstance, from_json
     from .utils.aws_spot_exception import SpotConstraintException
     from .utils import paths
 
@@ -97,18 +94,23 @@ def upload_archive(fpath, name, archive_excludes, s3_bucket, skip_archive):
     return remote_url
 
 def _make_download_script(code_url):
+    print(">> Downloading code from {}".format(code_url))
     return """
-set -x
-cd ~
-kill -9 $(pgrep redis)
-tmux kill-server
-wget -S '{code_url}' -O code.tar.gz
-tar xvaf code.tar.gz
-rm code.tar.gz
-""".format(code_url=code_url)
+    set -x
+    cd ~
+    wget -S '{code_url}' -O code.tar.gz
+    mkdir research
+    cd research
+    tar xvaf ../code.tar.gz
+    cd ~
+    rm code.tar.gz
+    sudo mv research /home/rstudio
+    sudo usermod -aG ubuntu rstudio
+    sudo chown -R rstudio:ubuntu /home/rstudio/research
+    """.format(code_url=code_url)
 
 def get_ami_id_from_name_and_region(name, region):
-    session = boto3.setup_default_session(region_name=region)
+    boto3.setup_default_session(region_name=region)
     client = boto3.client('ec2')
     amis = client.describe_images()['Images']
     amis = [ami for ami in amis if 'Name' in ami.keys()]
@@ -242,20 +244,21 @@ def from_config(conf):
     instances = launch_instances(uconf.QTY_INSTANCES, conf)
     code_url = upload_archive(os.getcwd(), conf, uconf.ARCHIVE_EXCLUDES, uconf.S3_BUCKET, skip_archive=False)
 
-    for si in instances:
+    for n, si in enumerate(instances):
         if uconf.WAIT_FOR_HTTP:
             si.wait_for_http()
+            si.serialize(n)
         if uconf.WAIT_FOR_SSH:
             si.wait_for_ssh()
+        if uconf.COPY_CODE:
+            execute(_run_on_nodes, si.ip,
+                    _make_download_script(code_url))
         if uconf.OPEN_IN_BROWSER:
             si.open_in_browser()
         if uconf.OPEN_SSH:
              si.open_ssh_term()
         if uconf.ADD_TO_ANSIBLE_HOSTS:
             si.add_to_ansible_hosts()
-        if uconf.COPY_CODE:
-            execute(_run_on_nodes, si.ip,
-                    _make_download_script(code_url))
 
     if uconf.RUN_ANSIBLE:
         _run_ansible(conf, ["configuration"])
@@ -287,13 +290,69 @@ config.add_command(edit)
 
 ansible.add_command(edit_ansible)
 
+
+@click.group()
+@click.argument("conf")
+@click.argument("n")
+@click.pass_context
+def run(ctx, conf, n):
+    instance = from_json(conf, n)
+    ctx.obj['instance'] = instance
+    ctx.obj['conf'] = conf
+    pass
+
+def ls(conf):
+    with open("{}.pickle".format(conf), "rb") as f:
+        instances = pickle.load(f)
+    print(["{}: {}".format(n, instance.ip) for n, instance in enumerate(instances)])
+
+@click.command()
+@click.pass_context
+def ssh(ctx):
+    ctx.obj['instance'].open_ssh_term()
+
+@click.command()
+@click.pass_context
+def browser(ctx):
+    ctx.obj['instance'].open_in_browser()
+
+@click.command()
+@click.pass_context
+def upload_code(ctx):
+    uconf = paths._load_config(conf)
+    instance = ctx.obj['instance']
+    conf = ctx.obj['conf']
+    code_url = upload_archive(os.getcwd(),
+                              conf,
+                              uconf.ARCHIVE_EXCLUDES,
+                              uconf.S3_BUCKET,
+                              skip_archive=False)
+    env.key_filename = expanduser(uconf.PATH_TO_KEY)
+    env.user = 'ubuntu'
+#    env.hosts = [instance.ip]
+    with settings(host_string=instance.ip):
+        res = fabric.operations.run(_make_download_script(code_url))
+
+
+run.add_command(ansible)
+run.add_command(ssh)
+run.add_command(browser)
+run.add_command(upload_code)
+
+@click.group()
+def data():
+    pass
+
+
+
 @click.group()
 def cli():
     pass
 
 cli.add_command(launch)
 cli.add_command(config)
-cli.add_command(ansible)
+cli.add_command(run)
+
 
 if __name__ == "__main__":
-    cli()
+    cli(obj={})

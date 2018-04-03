@@ -2,39 +2,54 @@ import boto3
 import collections
 
 # from https://gist.github.com/steder/1498451
-SecurityGroupRule = collections.namedtuple("SecurityGroupRule", ["ip_protocol", "from_port", "to_port", "cidr_ip", "src_group_name"])
+SecurityGroupRule = collections.namedtuple("SecurityGroupRule", ["ip_protocol",
+                                                                 "from_port",
+                                                                 "to_port",
+                                                                 "cidr_ip",
+                                                                 "src_group_name"])
 
-def get_or_create_security_group(c, group_name, description=""):
+def get_or_create_security_group(c, group_name,
+                                 vpc_id=None,
+                                 description=""):
     """
     """
-    groups = [g for g in c.get_all_security_groups() if g.name == group_name]
-    group = groups[0] if groups else None
+    groups = c.describe_security_groups(
+        Filters=[{'Name': 'group-name',
+                  'Values': [group_name]}])['SecurityGroups']
+    ec2 = boto3.resource('ec2')
+    group = ec2.SecurityGroup(groups[0]['GroupId']) if groups else None
+    #group = c.SecurityGroup(r['GroupId'])
     if not group:
-        print("Creating group '%s'..."%(group_name,))
-        group = c.create_security_group(group_name, "A group for %s"%(group_name,))
+        print(">> Creating Group {} for vpc {}".format(group_name, vpc_id))
+        if vpc_id is not None:
+            r = ec2.create_security_group(
+                GroupName=group_name,
+                VpcId=vpc_id,
+                Description="A group for {}".format(group_name))
+        else:
+            print(">> Creating Group {} for vpc {}".format(group_name, vpc_id))
+            r = ec2.create_security_group(
+                GroupName=group_name,
+                VpcId=vpc_id,
+                Description="A group for {}".format(group_name))
+        group = ec2.SecurityGroup(r['GroupId'])
     return group
 
 
 def modify_sg(c, group, rule, authorize=False, revoke=False):
     src_group = None
     if rule.src_group_name:
-        src_group = c.get_all_security_groups([rule.src_group_name,])[0]
+        src_group = c.describe_security_groups(
+            Filters=[{'Name': 'group-name',
+                      'Values': [rule.src_group_name]}])['SecurityGroups'][0]
 
     if authorize and not revoke:
         print("Authorizing missing rule %s..."%(rule,))
-        group.authorize(ip_protocol=rule.ip_protocol,
-                        from_port=rule.from_port,
-                        to_port=rule.to_port,
-                        cidr_ip=rule.cidr_ip,
-                        src_group=src_group)
-    elif not authorize and revoke:
-        print("Revoking unexpected rule %s..."%(rule,))
-        group.revoke(ip_protocol=rule.ip_protocol,
-                     from_port=rule.from_port,
-                     to_port=rule.to_port,
-                     cidr_ip=rule.cidr_ip,
-                     src_group=src_group)
-
+        group.authorize_ingress(
+            FromPort = rule.from_port,
+            ToPort = rule.to_port,
+            CidrIp = rule.cidr_ip,
+            IpProtocol = rule.ip_protocol)
 
 def authorize(c, group, rule):
     """Authorize `rule` on `group`."""
@@ -49,30 +64,30 @@ def revoke(c, group, rule):
 def update_security_group(c, group, expected_rules):
     """
     """
-    print('Updating group "%s"...'%(group.name,))
+    print('Updating group "%s"...'%(group.group_name,))
     import pprint
     print("Expected Rules:")
     pprint.pprint(expected_rules)
 
     current_rules = []
-    for rule in group.rules:
-        if not rule.grants[0].cidr_ip:
-            current_rule = SecurityGroupRule(rule.ip_protocol,
-                              rule.from_port,
-                              rule.to_port,
-                              "0.0.0.0/0",
-                              rule.grants[0].name)
-        else:
-            current_rule = SecurityGroupRule(rule.ip_protocol,
-                              rule.from_port,
-                              rule.to_port,
-                              rule.grants[0].cidr_ip,
-                              None)
+    for rule in group.ip_permissions:
+        # if not rule.grants[0].cidr_ip:
+        current_rule = SecurityGroupRule(rule['IpProtocol'],
+                                         rule['FromPort'],
+                                         rule['ToPort'],
+                                         "0.0.0.0/0",
+                                         None)
+        # else:
+        #     current_rule = SecurityGroupRule(rule.ip_protocol,
+        #                       rule.from_port,
+        #                       rule.to_port,
+        #                       rule.grants[0].cidr_ip,
+        #                       None)
 
-        if current_rule not in expected_rules:
-            revoke(c, group, current_rule)
-        else:
-            current_rules.append(current_rule)
+        # if current_rule not in expected_rules:
+        #     revoke(c, group, current_rule)
+        # else:
+        current_rules.append(current_rule)
 
     print("Current Rules:")
     pprint.pprint(current_rules)
