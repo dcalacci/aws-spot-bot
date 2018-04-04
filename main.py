@@ -432,7 +432,9 @@ def diff(ctx):
 @click.command()
 @click.pass_context
 @click.argument("which_dir", type=click.Choice(['data', 'output']))
-def sync(ctx, which_dir):
+@click.option("--pull/--push", default=False)
+@click.option("--dry/--wet", default=False)
+def sync(ctx, which_dir, pull, dry):
     instance = ctx.obj['instance']
     conf = ctx.obj['conf']
     uconf = paths._load_config(conf)
@@ -454,14 +456,29 @@ def sync(ctx, which_dir):
         fabric.operations.run("sudo chmod -R g+rwx /home/rstudio/research/{}".format(dirname))
         fabric.operations.run("sudo chown -R rstudio:ubuntu /home/rstudio/research/{}".format(dirname))
 
-    cmd = (["rsync", "-ravz"] + exclude_cmd +
+    if pull:
+        target_dir = dirname
+    else:
+        target_dir = os.path.split(dirname)[0]
+    opts = "-ravz"
+    if dry:
+        opts = "-nravz"
+    cmd = (["rsync", opts] +
+           exclude_cmd +
            ["-e",
-           'ssh -i {}'.format(expanduser(uconf.PATH_TO_KEY)),
+            'ssh -i {}'.format(expanduser(uconf.PATH_TO_KEY)),
             "{}".format(dirname),
             "{}@{}:/home/rstudio/research/{}".format(
                 uconf.SSH_USER_NAME,
                 instance.ip,
-                os.path.split(dirname)[0])])
+                target_dir)])
+    # print(cmd)
+    # print(len(cmd))
+    if pull:
+        # swap target and source
+        t = cmd[-2]
+        cmd[-2] = cmd[-1]
+        cmd[-1] = t
     _highlight("Syncing files using rsync...")
     print("command: ", cmd)
     if click.confirm('Do you want to continue?'):
