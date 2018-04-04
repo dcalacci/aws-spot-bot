@@ -21,17 +21,10 @@ def _open_in_editor(path):
     editor = os.environ.get('EDITOR', DEFAULT_EDITOR)
     subprocess.call([editor, path])
 
-def _check_required_env_vars():
-    keys = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "KEY_NAME"]
-    in_env = [k in os.environ for k in keys]
-#    assert all(in_env), 'Please set the environment variables "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"!'
-    return True
-
-if _check_required_env_vars():
-    from .utils import pricing_util
-    from .utils.aws_spot_instance import AWSSpotInstance, from_json
-    from .utils.aws_spot_exception import SpotConstraintException
-    from .utils import paths
+from .utils import pricing_util
+from .utils.aws_spot_instance import AWSSpotInstance, from_json
+from .utils.aws_spot_exception import SpotConstraintException
+from .utils import paths
 
 
 def _highlight(x, fg='green'):
@@ -39,7 +32,7 @@ def _highlight(x, fg='green'):
         x = json.dumps(x, sort_keys=True, indent=2)
     click.secho(x, fg=fg)
 
-def upload_archive(fpath, name, archive_excludes, s3_bucket, skip_archive):
+def upload_archive(fpath, name, s3_bucket, skip_archive, exclude_file):
     import hashlib, os.path as osp, subprocess, tempfile, uuid, sys
     # Archive this package
     thisfile_dir = osp.dirname(osp.abspath(fpath))
@@ -64,8 +57,10 @@ def upload_archive(fpath, name, archive_excludes, s3_bucket, skip_archive):
     else:
         local_archive_path = osp.join(tmpdir, 'aws_spot_{}.tar.gz'.format(uuid.uuid4()))
         tar_cmd = ["tar", "-vzcf", local_archive_path]
-        for pattern in archive_excludes:
-            tar_cmd += ["--exclude", '{}'.format(pattern)]
+        if exclude_file is not None:
+            tar_cmd += ["-X", "{}".format(exclude_file)]
+        # for pattern in archive_excludes:
+        #     tar_cmd += ["--exclude", '{}'.format(pattern)]
         tar_cmd += ['.']
         _highlight("TAR CMD: {}".format(" ".join(tar_cmd)))
 
@@ -239,13 +234,25 @@ def from_config(conf):
     import sys
     uconf = paths._load_config(conf)
     _highlight("Using configuration {}".format(conf))
+
+    if os.path.exists(".exclude"):
+        with open(".exclude", 'r') as f:
+            to_exclude = f.read().split("\n")
+            exclude_file=".exclude"
+    else:
+        to_exclude = []
+        exclude_file=None
+
+    _highlight("Excluding these patterns from archive:")
+    print(", ".join(to_exclude))
     if not click.confirm('Do you want to continue? This will upload your current directory to the instance.'):
         return
+    code_url = upload_archive(os.getcwd(), conf, uconf.S3_BUCKET, skip_archive=False, exclude_file=exclude_file)
+
     #importlib.import_module(conf)
     #uconf = importlib.import_module(conf)
     #_load_module_from_path("uconf", path)
     instances = launch_instances(uconf.QTY_INSTANCES, conf)
-    code_url = upload_archive(os.getcwd(), conf, uconf.ARCHIVE_EXCLUDES, uconf.S3_BUCKET, skip_archive=False)
 
     for n, si in enumerate(instances):
         if uconf.WAIT_FOR_HTTP:
@@ -325,11 +332,15 @@ def upload_code(ctx):
     instance = ctx.obj['instance']
     conf = ctx.obj['conf']
     uconf = paths._load_config(conf)
+    if os.path.exists(".exclude"):
+        exclude_file = ".exclude"
+    else:
+        exclude_file = None
     code_url = upload_archive(os.getcwd(),
                               conf,
-                              uconf.ARCHIVE_EXCLUDES,
                               uconf.S3_BUCKET,
-                              skip_archive=False)
+                              skip_archive=False,
+                              exclude_file=exclude_file)
     env.key_filename = expanduser(uconf.PATH_TO_KEY)
     env.user = 'ubuntu'
 #    env.hosts = [instance.ip]
@@ -342,14 +353,19 @@ def rsync(ctx):
     instance = ctx.obj['instance']
     conf = ctx.obj['conf']
     uconf = paths._load_config(conf)
-    cmd = ["rsync", "-az",
-           "-p",
-           "-e",
+
+    if os.path.exists(".exclude"):
+        exclude_cmd = ["--exclude_from", ".exclude"]
+    else:
+        exclude_cmd = []
+    cmd = (["rsync", "-az",
+           "-p"] + exclude_cmd +
+           ["-e",
            'ssh -i {}'.format(expanduser(uconf.PATH_TO_KEY)),
            ".",
            "{}@{}:/home/rstudio/research".format(
                uconf.SSH_USER_NAME,
-               instance.ip)]
+               instance.ip)])
     _highlight("Prepping to sync entire code directory")
 
     get_total_size = (cmd[:1] + ["-vnaz"] + cmd[2:])
@@ -385,14 +401,18 @@ def diff(ctx):
     instance = ctx.obj['instance']
     conf = ctx.obj['conf']
     uconf = paths._load_config(conf)
-    cmd = ["rsync", "-navz",
-           "-e",
+    if os.path.exists(".exclude_data"):
+        exclude_cmd = ["--exclude_from", ".exclude_data"]
+    else:
+        exclude_cmd = []
+    cmd = (["rsync", "-navz"] + exclude_cmd +
+           ["-e",
            'ssh -i {}'.format(expanduser(uconf.PATH_TO_KEY)),
            "{}@{}:/home/rstudio/research/{}".format(
                uconf.SSH_USER_NAME,
                instance.ip,
                uconf.DATA_DIR),
-           "{}".format(uconf.DATA_DIR)]
+           "{}".format(uconf.DATA_DIR)])
     #print(">> cmd: ", " ".join(cmd))
     _highlight("These files will be changed on a sync:")
     subprocess.call(cmd)
@@ -403,17 +423,20 @@ def sync(ctx):
     instance = ctx.obj['instance']
     conf = ctx.obj['conf']
     uconf = paths._load_config(conf)
+    if os.path.exists(".exclude_data"):
+        exclude_cmd = ["--exclude_from", ".exclude_data"]
+    else:
+        exclude_cmd = []
     #rsync -avz -e "ssh -p1234  -i /home/username/.ssh/1234-identity" dir user@server:
 
-    cmd = ["rsync", "-avz",
-           "--info=progress2"
-           "-e",
+    cmd = (["rsync", "-avz"] + exclude_cmd +
+           ["-e",
            'ssh -i {}'.format(expanduser(uconf.PATH_TO_KEY)),
            "{}@{}:/home/rstudio/research/{}".format(
                uconf.SSH_USER_NAME,
                instance.ip,
                uconf.DATA_DIR),
-           "{}".format(uconf.DATA_DIR)]
+           "{}".format(uconf.DATA_DIR)])
     _highlight("Syncing files using rsync...")
     if click.confirm('Do you want to continue?'):
         subprocess.call(cmd)

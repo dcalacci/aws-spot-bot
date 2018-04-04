@@ -93,7 +93,7 @@ class AWSSpotInstance():
                              self.security_group_name,
                              self.group_name, self.spot_instance_request_id,
                              self.instance_id, self.ip, self.config_name]
-        instances_path = os.path.join(paths._custom_path,
+        instances_path = os.path.join(paths._custom_path(),
                                       "instances")
         if not os.path.exists(instances_path):
             os.mkdir(instances_path)

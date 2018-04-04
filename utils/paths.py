@@ -10,7 +10,7 @@ from .. import configs
 
 def _custom_path():
     home = expanduser("~")
-    return "{}/.lab_configs".format(home)
+    return "{}/.lab_config".format(home)
 
 def _has_custom_configs():
     return len(os.listdir(_custom_path())) > 0
