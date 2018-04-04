@@ -28,7 +28,7 @@ class MyEncoder(json.JSONEncoder):
                 return None
 
 def from_json(conf, n):
-    path = os.path.join(paths._custom_path,
+    path = os.path.join(paths._custom_path(),
                         "instances",
                         "{}_{}.json".format(conf, n))
     with open(path, 'r') as f:

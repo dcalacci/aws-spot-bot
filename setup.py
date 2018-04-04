@@ -7,6 +7,10 @@ def _highlight(x, fg='green'):
     click.secho(x, fg=fg)
 
 if __name__ == "__main__":
+    print("This will create a configuration directory at ~/.lab_config, and an executable `labbox` in /usr/local/bin.")
+    if not click.confirm('Do you want to continue?'):
+        print("Aborting...")
+        return
     _highlight("Making directory ~/.lab_config")
     if not os.path.exists(expanduser("~/.lab_config")):
         os.mkdir(expanduser("~/.lab_config"))

@@ -50,7 +50,7 @@ def upload_archive(fpath, name, s3_bucket, skip_archive, exclude_file):
         if len(archives) == 0:
             _highlight("No existing archives found in {}...".format(tmpdir))
             input("\nPress return to continue and create a new code archive.")
-            upload_archive(fpath, name, archive_excludes, s3_bucket, False)
+            upload_archive(fpath, name, s3_bucket, False, exclude_file=exclude_file)
             return
         latest_file = max(archives, key=os.path.getctime)
         local_archive_path = latest_file
@@ -261,8 +261,10 @@ def from_config(conf):
         if uconf.WAIT_FOR_SSH:
             si.wait_for_ssh()
         if uconf.COPY_CODE:
-            execute(_run_on_nodes, si.ip,
-                    _make_download_script(code_url))
+            env.key_filename = expanduser(uconf.PATH_TO_KEY)
+            env.user = 'ubuntu'
+            with settings(host_string=si.ip):
+                fabric.operations.run(_make_download_script(code_url))
         if uconf.OPEN_IN_BROWSER:
             si.open_in_browser()
         if uconf.OPEN_SSH:
@@ -277,7 +279,6 @@ def from_config(conf):
 def config():
     """Manage launch configurations
     """
-    _check_required_env_vars()
     pass
 
 @click.group()
@@ -306,6 +307,7 @@ ansible.add_command(edit_ansible)
 @click.argument("n")
 @click.pass_context
 def run(ctx, conf, n):
+    print(conf)
     instance = from_json(conf, n)
     ctx.obj['instance'] = instance
     ctx.obj['conf'] = conf
@@ -419,7 +421,8 @@ def diff(ctx):
 
 @click.command()
 @click.pass_context
-def sync(ctx):
+@click.argument("which_dir", type=click.Choice(['data', 'output']))
+def sync(ctx, which_dir):
     instance = ctx.obj['instance']
     conf = ctx.obj['conf']
     uconf = paths._load_config(conf)
@@ -429,19 +432,30 @@ def sync(ctx):
         exclude_cmd = []
     #rsync -avz -e "ssh -p1234  -i /home/username/.ssh/1234-identity" dir user@server:
 
+    if which_dir == 'data':
+        dirname = uconf.DATA_DIR
+    elif which_dir == 'output':
+        dirname = uconf.OUTPUT_DIR
+
+    env.key_filename = expanduser(uconf.PATH_TO_KEY)
+    env.user = 'ubuntu'
+    with settings(host_string=instance.ip):
+        fabric.operations.run("sudo mkdir -p /home/rstudio/research/{}".format(dirname))
+
     cmd = (["rsync", "-avz"] + exclude_cmd +
            ["-e",
            'ssh -i {}'.format(expanduser(uconf.PATH_TO_KEY)),
-           "{}@{}:/home/rstudio/research/{}".format(
+            "{}".format(dirname),
+           "{}@{}:/home/rstudio/research/".format(
                uconf.SSH_USER_NAME,
-               instance.ip,
-               uconf.DATA_DIR),
-           "{}".format(uconf.DATA_DIR)])
+               instance.ip)])
     _highlight("Syncing files using rsync...")
+    print("command: ", cmd)
     if click.confirm('Do you want to continue?'):
         subprocess.call(cmd)
 
 data.add_command(diff)
+data.add_command(sync)
 
 @click.group()
 def cli():
