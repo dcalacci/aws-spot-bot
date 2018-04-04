@@ -99,7 +99,8 @@ def _make_download_script(code_url):
     tar xvaf ../code.tar.gz
     cd ~
     rm code.tar.gz
-    sudo mv research /home/rstudio
+    sudo mkdir -p /home/rstudio/research
+    sudo mv research/* /home/rstudio/research/
     sudo usermod -aG ubuntu rstudio
     sudo chmod -R g+rwx /home/rstudio
     sudo chown -R rstudio:ubuntu /home/rstudio/research
@@ -357,10 +358,12 @@ def rsync(ctx):
     uconf = paths._load_config(conf)
 
     if os.path.exists(".exclude"):
-        exclude_cmd = ["--exclude_from", ".exclude"]
+        exclude_cmd = ["--exclude-from", ".exclude"]
     else:
         exclude_cmd = []
-    cmd = (["rsync", "-az",
+
+    cmd = (["rsync",
+            "-avz",
            "-p"] + exclude_cmd +
            ["-e",
            'ssh -i {}'.format(expanduser(uconf.PATH_TO_KEY)),
@@ -381,6 +384,13 @@ def rsync(ctx):
     if click.confirm('Do you want to continue?'):
         subprocess.call(cmd)
 
+@click.command()
+@click.pass_context
+def get_ip(ctx):
+    instance = ctx.obj['instance']
+    print(instance.ip)
+
+run.add_command(get_ip)
 run.add_command(ansible)
 run.add_command(ssh)
 run.add_command(browser)
@@ -441,14 +451,17 @@ def sync(ctx, which_dir):
     env.user = 'ubuntu'
     with settings(host_string=instance.ip):
         fabric.operations.run("sudo mkdir -p /home/rstudio/research/{}".format(dirname))
+        fabric.operations.run("sudo chmod -R g+rwx /home/rstudio/research/{}".format(dirname))
+        fabric.operations.run("sudo chown -R rstudio:ubuntu /home/rstudio/research/{}".format(dirname))
 
-    cmd = (["rsync", "-avz"] + exclude_cmd +
+    cmd = (["rsync", "-ravz"] + exclude_cmd +
            ["-e",
            'ssh -i {}'.format(expanduser(uconf.PATH_TO_KEY)),
             "{}".format(dirname),
-           "{}@{}:/home/rstudio/research/".format(
-               uconf.SSH_USER_NAME,
-               instance.ip)])
+            "{}@{}:/home/rstudio/research/{}".format(
+                uconf.SSH_USER_NAME,
+                instance.ip,
+                os.path.split(dirname)[0])])
     _highlight("Syncing files using rsync...")
     print("command: ", cmd)
     if click.confirm('Do you want to continue?'):
@@ -456,6 +469,7 @@ def sync(ctx, which_dir):
 
 data.add_command(diff)
 data.add_command(sync)
+
 
 @click.group()
 def cli():
