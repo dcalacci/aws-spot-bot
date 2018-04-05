@@ -357,20 +357,35 @@ def rsync(ctx):
     conf = ctx.obj['conf']
     uconf = paths._load_config(conf)
 
+    # set permissions
+    env.key_filename = expanduser(uconf.PATH_TO_KEY)
+    env.user = 'ubuntu'
+    with settings(host_string=instance.ip):
+        fabric.operations.run("sudo mkdir -p /home/rstudio/research")
+        fabric.operations.run("sudo chmod -R g+rwx /home/rstudio/research")
+        fabric.operations.run("sudo chown -R rstudio:ubuntu /home/rstudio/research")
+
     if os.path.exists(".exclude"):
         exclude_cmd = ["--exclude-from", ".exclude"]
     else:
         exclude_cmd = []
 
     cmd = (["rsync",
-            "-avz",
-           "-p"] + exclude_cmd +
+            "-avzO",
+            "--no-owner",
+            "--no-perms"
+            # "-p",
+            # "--owner",
+            # "rstudio",
+            # "--group",
+            # "ubuntu"
+    ] + exclude_cmd +
            ["-e",
-           'ssh -i {}'.format(expanduser(uconf.PATH_TO_KEY)),
-           ".",
-           "{}@{}:/home/rstudio/research".format(
-               uconf.SSH_USER_NAME,
-               instance.ip)])
+            'ssh -i {}'.format(expanduser(uconf.PATH_TO_KEY)),
+            ".",
+            "{}@{}:/home/rstudio/research".format(
+                uconf.SSH_USER_NAME,
+                instance.ip)])
     _highlight("Prepping to sync entire code directory")
 
     get_total_size = (cmd[:1] + ["-vnaz"] + cmd[2:])
@@ -417,7 +432,10 @@ def diff(ctx):
         exclude_cmd = ["--exclude_from", ".exclude_data"]
     else:
         exclude_cmd = []
-    cmd = (["rsync", "-navz"] + exclude_cmd +
+    cmd = (["rsync",
+            "-navzO",
+            "--no-owner",
+            "--no-perms"] + exclude_cmd +
            ["-e",
            'ssh -i {}'.format(expanduser(uconf.PATH_TO_KEY)),
            "{}@{}:/home/rstudio/research/{}".format(
@@ -460,10 +478,14 @@ def sync(ctx, which_dir, pull, dry):
         target_dir = dirname
     else:
         target_dir = os.path.split(dirname)[0]
-    opts = "-ravz"
+
+    opts = "-avzO"
     if dry:
-        opts = "-nravz"
-    cmd = (["rsync", opts] +
+        opts = "-navzO"
+    cmd = (["rsync",
+            opts +
+            "--no-owner",
+            "--no-perms"] +
            exclude_cmd +
            ["-e",
             'ssh -i {}'.format(expanduser(uconf.PATH_TO_KEY)),

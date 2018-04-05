@@ -47,7 +47,7 @@ def from_json(conf, n):
     si.spot_instance_request_id = spot_instance_request_id
     si.instance_id = instance_id
     si.ip = ip
-    print(">> created instance with ip: ", si.ip, ip)
+    #print(">> created instance with ip: ", si.ip, ip)
     si.start_boto()
     return si
 
