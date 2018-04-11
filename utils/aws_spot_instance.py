@@ -271,20 +271,20 @@ class AWSSpotInstance():
 
         print(">> port %s is live" % (port))
 
-if __name__ == '__main__':
-    import pricing_util
-    # best_az = pricing_util.get_best_az()
-    # print best_az.region
-    # print best_az.name
-    region = 'us-east-1'
-    az_zone = 'us-east-1d'
-    instance_type = uconf.INSTANCE_TYPES[0]
-    si = AWSSpotInstance(region, az_zone, instance_type, uconf.AMI_ID, uconf.BID)
-    response = si.request_instance()
-    print(response)
-    print(si.get_ip())
-    si.wait_for_ssh()
-    si.wait_for_http()
+# if __name__ == '__main__':
+#     import pricing_util
+#     # best_az = pricing_util.get_best_az()
+#     # print best_az.region
+#     # print best_az.name
+#     region = 'us-east-1'
+#     az_zone = 'us-east-1d'
+#     instance_type = uconf.INSTANCE_TYPES[0]
+#     si = AWSSpotInstance(region, az_zone, instance_type, uconf.AMI_ID, uconf.BID)
+#     response = si.request_instance()
+#     print(response)
+#     print(si.get_ip())
+#     si.wait_for_ssh()
+#     si.wait_for_http()
 
-    si.open_in_browser()
-    si.open_ssh_term()
+#     si.open_in_browser()
+#     si.open_ssh_term()

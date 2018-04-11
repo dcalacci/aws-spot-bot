@@ -25,7 +25,7 @@ def _has_custom_configs():
 def _get_custom_config_names():
     if not _has_custom_configs():
         return []
-    return [s.split(".py")[0] for s in os.listdir(_custom_path())]
+    return [s.split(".py")[0] for s in os.listdir(_custom_path()) if '.py' in s]
 
 def _get_config_names():
     import pkgutil

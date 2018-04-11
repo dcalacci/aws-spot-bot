@@ -387,6 +387,7 @@ def rsync(ctx):
                 uconf.SSH_USER_NAME,
                 instance.ip)])
     _highlight("Prepping to sync entire code directory")
+    print(cmd)
 
     get_total_size = (cmd[:1] + ["-vnaz"] + cmd[2:])
     ps = subprocess.Popen(get_total_size,
@@ -398,6 +399,10 @@ def rsync(ctx):
 
     if click.confirm('Do you want to continue?'):
         subprocess.call(cmd)
+    with settings(host_string=instance.ip):
+        fabric.operations.run("sudo mkdir -p /home/rstudio/research")
+        fabric.operations.run("sudo chmod -R g+rwx /home/rstudio/research")
+        fabric.operations.run("sudo chown -R rstudio:ubuntu /home/rstudio/research")
 
 @click.command()
 @click.pass_context
@@ -479,13 +484,15 @@ def sync(ctx, which_dir, pull, dry):
     else:
         target_dir = os.path.split(dirname)[0]
 
+    print(">> Using target dir:", target_dir)
+
     opts = "-avzO"
     if dry:
         opts = "-navzO"
     cmd = (["rsync",
-            opts +
-            "--no-owner",
-            "--no-perms"] +
+            opts] +
+            ["--no-owner",
+             "--no-perms"] +
            exclude_cmd +
            ["-e",
             'ssh -i {}'.format(expanduser(uconf.PATH_TO_KEY)),
